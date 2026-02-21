@@ -1,0 +1,10 @@
+[project]
+name = "neurotech-hackathon"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "gpype>=3.0.9",
+    "pillow>=11.0.0",
+]
