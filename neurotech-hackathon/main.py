@@ -25,8 +25,11 @@ if _env_path.exists():
             key, _, val = line.partition("=")
             os.environ.setdefault(key.strip(), val.strip())
 
+from PySide6.QtWidgets import QApplication
+
 import gpype as gp
 
+from images import Image, Video, generate_images
 from ssvep_detector import SSVEPDetector
 from ssvep_stimulus import SSVEPStimulus
 
@@ -34,6 +37,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
+log = logging.getLogger(__name__)
 
 
 def _make_source(use_lsl: bool):
@@ -47,7 +51,7 @@ def _make_source(use_lsl: bool):
     return gp.Generator(
         sampling_rate=250.0,
         channel_count=8,
-        frame_size=4,
+        frame_size=1,
         signal_frequency=10.0,
         signal_amplitude=50.0,
         noise_amplitude=2.0,
@@ -63,11 +67,31 @@ def main() -> None:
         action="store_true",
         help="Receive EEG via LSL instead of local device",
     )
+    parser.add_argument(
+        "--prompt",
+        nargs=2,
+        metavar=("A", "B"),
+        default=[
+            "a calm blue ocean wave",
+            "a bright red fire flame",
+        ],
+        help="Two image prompts for Grok generation",
+    )
     args = parser.parse_args()
 
-    app = gp.MainApp(
-        caption="SSVEP BCI",
+    qapp = QApplication([])
+
+    stim_app = gp.MainApp(
+        caption="SSVEP Stimulus",
+        grid_size=[1, 1],
+        app=qapp,
+        position=[100, 100, 700, 500],
+    )
+    scope_app = gp.MainApp(
+        caption="SSVEP Scopes",
         grid_size=[2, 2],
+        app=qapp,
+        position=[820, 100, 900, 600],
     )
 
     pipeline = gp.Pipeline()
@@ -98,19 +122,54 @@ def main() -> None:
     pipeline.connect(fft, spectrum_scope)
 
     # SSVEP stimulus + detector
-    stimulus = SSVEPStimulus()
+    video_path = (
+        Path(__file__).parent / "assets" / "subway_surfers.mp4"
+    )
+    generated = generate_images(
+        args.prompt[0], args.prompt[1]
+    )
+
+    stimuli: list[Video | Image] = []
+    if video_path.exists():
+        log.info("Loading video stimulus: %s", video_path)
+        stimuli.append(Video(video_path))
+    elif generated:
+        stimuli.append(generated[0])
+    if generated:
+        stimuli.append(generated[1])
+
+    stimulus = SSVEPStimulus(
+        stimuli=stimuli or None
+    )
     detector = SSVEPDetector(
         on_detect=stimulus.set_detection
     )
     pipeline.connect(fft, detector)
 
-    # Layout: stimulus top-left, EEG top-right,
-    #         spectrum bottom (spanning both columns)
-    app.add_widget(stimulus, grid_positions=[1])
-    app.add_widget(eeg_scope, grid_positions=[2])
-    app.add_widget(spectrum_scope, grid_positions=[3, 4])
+    # SSVEP power scope: 2-channel [left, right] correlation
+    ssvep_scope = gp.TimeSeriesScope(time_window=10)
+    pipeline.connect(detector, ssvep_scope)
 
-    app.run(pipeline)
+    # Stimulus window: full-size flickering images
+    stim_app.add_widget(stimulus, grid_positions=[1])
+
+    # Scope window: EEG top, spectrum + SSVEP power bottom
+    scope_app.add_widget(
+        eeg_scope, grid_positions=[1, 2]
+    )
+    scope_app.add_widget(spectrum_scope, grid_positions=[3])
+    scope_app.add_widget(ssvep_scope, grid_positions=[4])
+
+    pipeline.start()
+    try:
+        # Show + start stimulus window manually
+        stim_app._window.show()
+        for w in stim_app._widgets:
+            w.run()
+        # Scope window enters Qt event loop
+        scope_app.run()
+    finally:
+        pipeline.stop()
 
 
 if __name__ == "__main__":

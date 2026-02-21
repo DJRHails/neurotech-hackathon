@@ -2,7 +2,8 @@
 
 Receives FFT magnitude data, compares power at two target
 frequencies (with harmonic boost), and classifies which stimulus
-the user is attending to.
+the user is attending to. Outputs a 2-channel signal of
+[power_left, power_right] for downstream visualization.
 """
 
 import logging
@@ -10,8 +11,10 @@ from collections.abc import Callable
 
 import numpy as np
 
-from gpype.backend.core.i_node import INode
+from gpype.backend.core.io_node import IONode
 from gpype.backend.core.i_port import IPort
+from gpype.backend.core.o_port import OPort
+from gpype.common.constants import Constants
 
 from ssvep_stimulus import DETECT_LEFT, DETECT_NONE, DETECT_RIGHT
 
@@ -37,8 +40,11 @@ _LABELS = {
 }
 
 
-class SSVEPDetector(INode):
-    """Pipeline sink that classifies SSVEP from FFT output."""
+class SSVEPDetector(IONode):
+    """Classifies SSVEP from FFT output.
+
+    Outputs 2-channel power signal [left, right] for visualization.
+    """
 
     def __init__(
         self,
@@ -46,10 +52,24 @@ class SSVEPDetector(INode):
         channels: list[int] | None = None,
     ) -> None:
         input_ports = [IPort.Configuration(name="in")]
-        INode.__init__(self, input_ports=input_ports)
+        output_ports = [OPort.Configuration(name="out")]
+        IONode.__init__(
+            self,
+            input_ports=input_ports,
+            output_ports=output_ports,
+        )
         self._on_detect = on_detect
         self._channels = channels or DEFAULT_CHANNELS
         self._last_result = DETECT_NONE
+
+    def setup(
+        self,
+        data: dict[str, np.ndarray],
+        port_context_in: dict[str, dict],
+    ) -> dict[str, dict]:
+        port_context_out = super().setup(data, port_context_in)
+        port_context_out["out"][Constants.Keys.CHANNEL_COUNT] = 2
+        return port_context_out
 
     def step(
         self, data: dict[str, np.ndarray]
@@ -62,25 +82,28 @@ class SSVEPDetector(INode):
         # At 1 Hz resolution (250 Hz / 250 samples), bin = freq
         n_bins = spectrum.shape[0]
 
-        result = self._classify(spectrum, n_bins)
+        power_left = self._band_power(spectrum, FREQ_LEFT, n_bins)
+        power_right = self._band_power(
+            spectrum, FREQ_RIGHT, n_bins
+        )
+
+        result = self._classify(power_left, power_right)
 
         if result != self._last_result:
             log.info("SSVEP detection: %s", _LABELS[result])
             self._last_result = result
 
         self._on_detect(result)
-        return {}
+
+        return {
+            "out": np.array(
+                [[power_left, power_right]], dtype=np.float32
+            )
+        }
 
     def _classify(
-        self, spectrum: np.ndarray, n_bins: int
+        self, power_left: float, power_right: float
     ) -> int:
-        power_left = self._band_power(
-            spectrum, FREQ_LEFT, n_bins
-        )
-        power_right = self._band_power(
-            spectrum, FREQ_RIGHT, n_bins
-        )
-
         if power_left == 0 and power_right == 0:
             return DETECT_NONE
 
