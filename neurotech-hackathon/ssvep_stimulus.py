@@ -7,7 +7,8 @@ feedback from SSVEPDetector via a thread-safe callback.
 
 import threading
 
-from PySide6.QtCore import Qt
+from loguru import logger
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -17,8 +18,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from gpype.frontend.widgets.base.widget import Widget
 
 from images import Image, Video, make_placeholder
 
@@ -40,20 +39,22 @@ FLICKER_CONFIG = [
 _BORDER_NONE = "border: 3px solid transparent;"
 _BORDER_DETECTED = "border: 3px solid #22C55E;"
 
+_TARGET_FPS = 60
+_TIMER_MS = 1000 // _TARGET_FPS
 
-class SSVEPStimulus(Widget):
+
+class SSVEPStimulus(QWidget):
     """Two-image SSVEP stimulus with frame-counted flicker."""
 
     def __init__(
         self,
         stimuli: list[Stimulus] | None = None,
     ) -> None:
-        container = QWidget()
-        Widget.__init__(
-            self,
-            widget=container,
-            name="SSVEP Stimulus",
-            layout=QVBoxLayout,
+        super().__init__()
+        self.setWindowTitle("SSVEP Stimulus")
+        logger.debug(
+            "SSVEPStimulus init | stimuli={} target_fps={}",
+            len(stimuli) if stimuli else 0, _TARGET_FPS,
         )
 
         self._frame = 0
@@ -65,6 +66,8 @@ class SSVEPStimulus(Widget):
         self._labels: list[QLabel] = []
         self._frames: list[QFrame] = []
 
+        layout = QVBoxLayout(self)
+
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -72,8 +75,13 @@ class SSVEPStimulus(Widget):
         for i in range(2):
             if stimuli and i < len(stimuli):
                 stim = stimuli[i]
+                logger.debug(
+                    "Slot {}: using provided stimulus ({})",
+                    i, type(stim).__name__,
+                )
             else:
                 stim = make_placeholder(i)
+                logger.debug("Slot {}: using placeholder", i)
             self._stimuli.append(stim)
 
             pixmap = stim.current
@@ -107,8 +115,22 @@ class SSVEPStimulus(Widget):
         self._status = QLabel("Detection: ---")
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._layout.addWidget(row)
-        self._layout.addWidget(self._status)
+        layout.addWidget(row)
+        layout.addWidget(self._status)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update)
+        logger.debug("SSVEPStimulus ready")
+
+    def start(self) -> None:
+        logger.info(
+            "Stimulus timer started | interval={}ms", _TIMER_MS
+        )
+        self._timer.start(_TIMER_MS)
+
+    def stop(self) -> None:
+        self._timer.stop()
+        logger.info("Stimulus timer stopped")
 
     def set_detection(self, result: int) -> None:
         """Thread-safe setter called from SSVEPDetector."""
@@ -121,7 +143,6 @@ class SSVEPStimulus(Widget):
         for stim in self._stimuli:
             stim.advance()
 
-        # Flicker each stimulus via pixmap swap
         for i, cfg in enumerate(FLICKER_CONFIG):
             hc = cfg["half_cycle"]
             visible = (self._frame % (2 * hc)) < hc
@@ -132,7 +153,6 @@ class SSVEPStimulus(Widget):
             else:
                 self._labels[i].setPixmap(self._blacks[i])
 
-        # Read detection and update borders
         with self._lock:
             det = self._detection
 
