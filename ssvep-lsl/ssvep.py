@@ -60,14 +60,14 @@ class CheckerBoard:
 
     def draw(self) -> None:
         """Draw one frame, toggling at the configured rate."""
+        stim = self._stim1 if self._toggle else self._stim2
+        stim.draw()
+        self._fr_counter -= 1
         if self._fr_counter == 0:
             if self.log_time:
                 self.toggle_times.append(time.time())
             self._fr_counter = self._fr_rate
-            stim = self._stim1 if self._toggle else self._stim2
-            stim.draw()
             self._toggle = not self._toggle
-        self._fr_counter -= 1
 
     def get_statistics(self) -> tuple[float, float]:
         """Return (mean, std) of toggle intervals in seconds."""
