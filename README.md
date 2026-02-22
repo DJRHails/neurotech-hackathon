@@ -1,4 +1,4 @@
-# ocd_autism_rule_game
+# flextra
 
 A new Flutter project.
 
