@@ -20,6 +20,7 @@ from loguru import logger
 from pylsl import StreamInfo, StreamOutlet
 
 STREAM_NAME = "ern_eeg"
+MARKER_STREAM_NAME = "ern_markers"
 TARGET_SRATE = 250
 CHUNK_SIZE = 8
 CHANNELS = ["FCz", "Fz", "Cz"]
@@ -137,6 +138,17 @@ def main() -> None:
         ch_xml.append_child("channel").append_child_value("label", ch_name)
 
     outlet = StreamOutlet(info, chunk_size=CHUNK_SIZE)
+
+    marker_info = StreamInfo(
+        name=MARKER_STREAM_NAME,
+        type="Markers",
+        channel_count=1,
+        nominal_srate=0,
+        channel_format="string",
+        source_id="erp_core_flanker_markers",
+    )
+    marker_outlet = StreamOutlet(marker_info)
+
     logger.info(
         "Streaming '{}': {} ch ({}) @ {} Hz, speed={:.1f}x",
         STREAM_NAME,
@@ -145,6 +157,7 @@ def main() -> None:
         TARGET_SRATE,
         args.speed,
     )
+    logger.info("Marker stream: '{}'", MARKER_STREAM_NAME)
     logger.info("Ctrl+C to stop")
 
     dt = CHUNK_SIZE / TARGET_SRATE / args.speed
@@ -164,9 +177,10 @@ def main() -> None:
                 chunk = data[idx : idx + CHUNK_SIZE]
                 outlet.push_chunk(chunk.tolist())
 
-                # Check for events in this chunk
+                # Check for events in this chunk and send markers
                 for s in range(idx, idx + CHUNK_SIZE):
                     if s in event_lookup:
+                        marker_outlet.push_sample([event_lookup[s]])
                         logger.info(
                             "[EVENT] sample={} | {}",
                             s,
