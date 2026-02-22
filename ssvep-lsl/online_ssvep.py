@@ -5,6 +5,7 @@ SSVEP classifier in real-time with psychopy visual stimulation.
 
 Usage:
     uv run python online_ssvep.py -s "lock_in_eeg_processed" -d 120
+    uv run python online_ssvep.py -s None -d 30  # stimulus only, no EEG
 """
 
 import argparse
@@ -37,7 +38,7 @@ def main() -> None:
         "-s",
         "--stream",
         default="lock_in_eeg_processed",
-        help="LSL stream name (default: lock_in_eeg_processed)",
+        help="LSL stream name, or 'None' for stimulus-only mode",
     )
     parser.add_argument(
         "-d",
@@ -47,18 +48,6 @@ def main() -> None:
         help="Duration in seconds (default: 120)",
     )
     args = parser.parse_args()
-
-    print(f"Resolving LSL stream '{args.stream}'...")
-    streams = resolve_byprop("name", args.stream, minimum=1, timeout=10)
-    if not streams:
-        raise RuntimeError(
-            f"No LSL stream '{args.stream}' found. Is the EEG source running?"
-        )
-
-    inlet = StreamInlet(streams[0])
-    info = inlet.info()
-    s_rate = int(info.nominal_srate())
-    print(f"Connected: {info.name()}, {info.channel_count()} ch @ {s_rate} Hz")
 
     # 4 targets at screen corners
     # At 60 Hz refresh: 12, 10, 8.57, 7.5 Hz
@@ -71,6 +60,29 @@ def main() -> None:
     target_labels = ["\u2199", "\u2196", "\u2197", "\u2198"]
     fr_rates = [5, 6, 7, 8]
 
+    use_lsl = args.stream.lower() != "none"
+
+    if use_lsl:
+        print(f"Resolving LSL stream '{args.stream}'...")
+        streams = resolve_byprop(
+            "name", args.stream, minimum=1, timeout=10
+        )
+        if not streams:
+            raise RuntimeError(
+                f"No LSL stream '{args.stream}' found. "
+                "Is the EEG source running?"
+            )
+        inlet = StreamInlet(streams[0])
+        info = inlet.info()
+        s_rate = int(info.nominal_srate())
+        print(
+            f"Connected: {info.name()}, "
+            f"{info.channel_count()} ch @ {s_rate} Hz"
+        )
+    else:
+        s_rate = 250
+        print("Stimulus-only mode (no LSL stream)")
+
     experiment = SSVEPRealTime(
         frame_rates=fr_rates,
         positions=target_pos,
@@ -82,20 +94,22 @@ def main() -> None:
     )
 
     stop = threading.Event()
-    reader = threading.Thread(
-        target=_lsl_reader,
-        args=(inlet, experiment, stop),
-        daemon=True,
-    )
-    reader.start()
+    if use_lsl:
+        reader = threading.Thread(
+            target=_lsl_reader,
+            args=(inlet, experiment, stop),
+            daemon=True,
+        )
+        reader.start()
 
     try:
         experiment.run(args.duration)
         experiment.show_statistics()
     finally:
         stop.set()
-        reader.join(timeout=2)
-        inlet.close_stream()
+        if use_lsl:
+            reader.join(timeout=2)
+            inlet.close_stream()
 
 
 if __name__ == "__main__":
