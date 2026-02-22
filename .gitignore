@@ -14,8 +14,10 @@ build/
 # Disk cache
 .cache/
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code
+.claude/
 
 
 *.csv
+
+plots/
