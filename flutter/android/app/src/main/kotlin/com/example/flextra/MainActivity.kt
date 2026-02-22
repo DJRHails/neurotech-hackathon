@@ -1,4 +1,4 @@
-package com.example.ocd_autism_rule_game
+package com.example.flextra
 
 import io.flutter.embedding.android.FlutterActivity
 

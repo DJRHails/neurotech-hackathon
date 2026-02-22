@@ -358,27 +358,13 @@ class _RoleCardState extends State<_RoleCard> {
 }
 
 // ---------------------------------------------------------------------------
-// Data models & enums (game logic unchanged)
+// Data models & enums
 // ---------------------------------------------------------------------------
 enum CardColorOption { red, blue, green }
 
 enum CardShapeOption { circle, square, triangle }
 
-enum RuleType {
-  pickRed,
-  pickBlue,
-  pickGreen,
-  moreShapes,
-  fewerShapes,
-  circles,
-  squares,
-  triangles,
-  redCircle,
-  blueSquare,
-  greenTriangle,
-  redMoreShapes,
-  circleFewerShapes,
-}
+enum MatchRule { color, shape, count }
 
 class GameCard {
   final CardColorOption color;
@@ -392,8 +378,18 @@ class GameCard {
   });
 }
 
+const kKeyCards = [
+  GameCard(color: CardColorOption.red, shape: CardShapeOption.circle, count: 1),
+  GameCard(color: CardColorOption.blue, shape: CardShapeOption.square, count: 2),
+  GameCard(
+    color: CardColorOption.green,
+    shape: CardShapeOption.triangle,
+    count: 3,
+  ),
+];
+
 // ---------------------------------------------------------------------------
-// Game page
+// Game page — classic WCST layout
 // ---------------------------------------------------------------------------
 class GamePage extends StatefulWidget {
   const GamePage({super.key});
@@ -406,17 +402,16 @@ class _GamePageState extends State<GamePage>
     with TickerProviderStateMixin {
   final Random _random = Random(42);
 
-  late List<RuleType> _ruleOrder;
+  late List<MatchRule> _ruleOrder;
   int _ruleIndex = 0;
-  late RuleType _currentRule;
-  late List<GameCard> _cards;
+  late MatchRule _currentRule;
+  late GameCard _responseCard;
 
   int _streak = 0;
   int _totalTrials = 0;
   int _totalCorrect = 0;
 
   bool? _lastCorrect;
-  GameCard? _previousCorrectCard;
 
   WebSocketChannel? _channel;
   String? _lastServerMessage;
@@ -427,9 +422,9 @@ class _GamePageState extends State<GamePage>
   @override
   void initState() {
     super.initState();
-    _ruleOrder = List.of(RuleType.values)..shuffle(_random);
+    _ruleOrder = List.of(MatchRule.values)..shuffle(_random);
     _currentRule = _ruleOrder[_ruleIndex];
-    _cards = _generateCardsForRule(_currentRule);
+    _responseCard = _generateResponseCard();
     _connectToWebSocket();
 
     _feedbackAnim = AnimationController(
@@ -466,7 +461,7 @@ class _GamePageState extends State<GamePage>
     }
   }
 
-  // ---- Game logic (unchanged) ----
+  // ---- Game logic ----
 
   void _advanceRule() {
     _ruleIndex = (_ruleIndex + 1) % _ruleOrder.length;
@@ -474,231 +469,51 @@ class _GamePageState extends State<GamePage>
     _streak = 0;
   }
 
-  List<GameCard> _generateCardsForRule(RuleType rule) {
-    GameCard correct;
-    GameCard other;
-
-    CardColorOption randomColor() =>
-        CardColorOption.values[_random.nextInt(3)];
-    CardShapeOption randomShape() =>
-        CardShapeOption.values[_random.nextInt(3)];
-
-    switch (rule) {
-      case RuleType.pickRed:
-        correct = GameCard(
-          color: CardColorOption.red,
-          shape: randomShape(),
-          count: _random.nextInt(3) + 1,
-        );
-        other = GameCard(
-          color: CardColorOption.blue,
-          shape: randomShape(),
-          count: correct.count,
-        );
-      case RuleType.pickBlue:
-        correct = GameCard(
-          color: CardColorOption.blue,
-          shape: randomShape(),
-          count: _random.nextInt(3) + 1,
-        );
-        other = GameCard(
-          color: CardColorOption.red,
-          shape: randomShape(),
-          count: correct.count,
-        );
-      case RuleType.pickGreen:
-        correct = GameCard(
-          color: CardColorOption.green,
-          shape: randomShape(),
-          count: _random.nextInt(3) + 1,
-        );
-        other = GameCard(
-          color: CardColorOption.red,
-          shape: randomShape(),
-          count: correct.count,
-        );
-      case RuleType.moreShapes:
-        final s = randomShape();
-        final c = randomColor();
-        final lo = _random.nextInt(2) + 1;
-        final hi = lo + _random.nextInt(2) + 1;
-        correct = GameCard(color: c, shape: s, count: hi);
-        other = GameCard(color: c, shape: s, count: lo);
-      case RuleType.fewerShapes:
-        final s = randomShape();
-        final c = randomColor();
-        final lo = _random.nextInt(2) + 1;
-        final hi = lo + _random.nextInt(2) + 1;
-        correct = GameCard(color: c, shape: s, count: lo);
-        other = GameCard(color: c, shape: s, count: hi);
-      case RuleType.circles:
-        final c = randomColor();
-        final n = _random.nextInt(3) + 1;
-        correct = GameCard(
-          color: c,
-          shape: CardShapeOption.circle,
-          count: n,
-        );
-        other = GameCard(
-          color: c,
-          shape: CardShapeOption.square,
-          count: n,
-        );
-      case RuleType.squares:
-        final c = randomColor();
-        final n = _random.nextInt(3) + 1;
-        correct = GameCard(
-          color: c,
-          shape: CardShapeOption.square,
-          count: n,
-        );
-        other = GameCard(
-          color: c,
-          shape: CardShapeOption.triangle,
-          count: n,
-        );
-      case RuleType.triangles:
-        final c = randomColor();
-        final n = _random.nextInt(3) + 1;
-        correct = GameCard(
-          color: c,
-          shape: CardShapeOption.triangle,
-          count: n,
-        );
-        other = GameCard(
-          color: c,
-          shape: CardShapeOption.circle,
-          count: n,
-        );
-      case RuleType.redCircle:
-        correct = GameCard(
-          color: CardColorOption.red,
-          shape: CardShapeOption.circle,
-          count: _random.nextInt(3) + 1,
-        );
-        other = GameCard(
-          color: CardColorOption.blue,
-          shape: CardShapeOption.square,
-          count: correct.count,
-        );
-      case RuleType.blueSquare:
-        correct = GameCard(
-          color: CardColorOption.blue,
-          shape: CardShapeOption.square,
-          count: _random.nextInt(3) + 1,
-        );
-        other = GameCard(
-          color: CardColorOption.green,
-          shape: CardShapeOption.circle,
-          count: correct.count,
-        );
-      case RuleType.greenTriangle:
-        correct = GameCard(
-          color: CardColorOption.green,
-          shape: CardShapeOption.triangle,
-          count: _random.nextInt(3) + 1,
-        );
-        other = GameCard(
-          color: CardColorOption.red,
-          shape: CardShapeOption.circle,
-          count: correct.count,
-        );
-      case RuleType.redMoreShapes:
-        final s = randomShape();
-        final lo = _random.nextInt(2) + 1;
-        final hi = lo + _random.nextInt(2) + 1;
-        correct = GameCard(
-          color: CardColorOption.red,
-          shape: s,
-          count: hi,
-        );
-        other = GameCard(
-          color: CardColorOption.blue,
-          shape: s,
-          count: lo,
-        );
-      case RuleType.circleFewerShapes:
-        final c = randomColor();
-        final lo = _random.nextInt(2) + 1;
-        final hi = lo + _random.nextInt(2) + 1;
-        correct = GameCard(
-          color: c,
-          shape: CardShapeOption.circle,
-          count: lo,
-        );
-        other = GameCard(
-          color: c,
-          shape: CardShapeOption.square,
-          count: hi,
-        );
-    }
-
-    return _random.nextBool() ? [correct, other] : [other, correct];
-  }
-
-  bool _isCorrectChoice(int index) {
-    final left = _cards[0];
-    final right = _cards[1];
-
-    bool matchesRule(GameCard card) {
-      switch (_currentRule) {
-        case RuleType.pickRed:
-          return card.color == CardColorOption.red;
-        case RuleType.pickBlue:
-          return card.color == CardColorOption.blue;
-        case RuleType.pickGreen:
-          return card.color == CardColorOption.green;
-        case RuleType.moreShapes:
-          return card.count == max(left.count, right.count);
-        case RuleType.fewerShapes:
-          return card.count == min(left.count, right.count);
-        case RuleType.circles:
-          return card.shape == CardShapeOption.circle;
-        case RuleType.squares:
-          return card.shape == CardShapeOption.square;
-        case RuleType.triangles:
-          return card.shape == CardShapeOption.triangle;
-        case RuleType.redCircle:
-          return card.color == CardColorOption.red &&
-              card.shape == CardShapeOption.circle;
-        case RuleType.blueSquare:
-          return card.color == CardColorOption.blue &&
-              card.shape == CardShapeOption.square;
-        case RuleType.greenTriangle:
-          return card.color == CardColorOption.green &&
-              card.shape == CardShapeOption.triangle;
-        case RuleType.redMoreShapes:
-          return card.color == CardColorOption.red &&
-              card.count == max(left.count, right.count);
-        case RuleType.circleFewerShapes:
-          return card.shape == CardShapeOption.circle &&
-              card.count == min(left.count, right.count);
+  GameCard _generateResponseCard() {
+    // Generate a card where at least 2 dimensions point to
+    // different key cards, avoiding trivial all-same matches.
+    while (true) {
+      final color = CardColorOption.values[_random.nextInt(3)];
+      final shape = CardShapeOption.values[_random.nextInt(3)];
+      final count = _random.nextInt(3) + 1;
+      final ci = color.index;
+      final si = shape.index;
+      final ni = count - 1;
+      if (ci != si || si != ni) {
+        return GameCard(color: color, shape: shape, count: count);
       }
     }
-
-    return matchesRule(_cards[index]);
   }
 
-  void _onCardTapped(int index) {
-    final correct = _isCorrectChoice(index);
+  int _correctKeyIndex() {
+    switch (_currentRule) {
+      case MatchRule.color:
+        return _responseCard.color.index;
+      case MatchRule.shape:
+        return _responseCard.shape.index;
+      case MatchRule.count:
+        return _responseCard.count - 1;
+    }
+  }
+
+  void _onOptionTapped(int keyIndex) {
+    final correct = keyIndex == _correctKeyIndex();
 
     setState(() {
       _lastCorrect = correct;
       _totalTrials++;
       if (correct) {
         _totalCorrect++;
-        _previousCorrectCard = _cards[index];
         _streak++;
       } else {
         _streak = 0;
-        _previousCorrectCard = null;
       }
 
       if (_streak >= 10) {
         _advanceRule();
       }
 
-      _cards = _generateCardsForRule(_currentRule);
+      _responseCard = _generateResponseCard();
     });
 
     debugPrint('Current rule: ${_currentRule.name}');
@@ -749,18 +564,20 @@ class _GamePageState extends State<GamePage>
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      'Discover the hidden rule',
+                      'Match this card',
                       style: tt.bodyMedium,
                     ),
+                    const SizedBox(height: 16),
+                    _buildReferenceCard(),
                     const SizedBox(height: 32),
-                    _buildCardPair(),
-                    const SizedBox(height: 28),
+                    Text(
+                      'to one of these',
+                      style: tt.bodyMedium,
+                    ),
+                    const SizedBox(height: 16),
+                    _buildOptionCards(),
+                    const SizedBox(height: 24),
                     _buildFeedback(tt),
-                    if (_previousCorrectCard != null &&
-                        _lastCorrect == true) ...[
-                      const SizedBox(height: 20),
-                      _buildReferenceSection(tt),
-                    ],
                     if (_lastServerMessage != null) ...[
                       const SizedBox(height: 16),
                       _buildServerMessage(tt),
@@ -790,7 +607,6 @@ class _GamePageState extends State<GamePage>
             ),
           ),
           const Spacer(),
-          // Streak indicator
           Container(
             padding: const EdgeInsets.symmetric(
               horizontal: 14,
@@ -831,7 +647,6 @@ class _GamePageState extends State<GamePage>
             ),
           ),
           const SizedBox(width: 8),
-          // Trial counter
           Text(
             'Trial $_totalTrials',
             style: tt.bodyMedium,
@@ -841,49 +656,28 @@ class _GamePageState extends State<GamePage>
     );
   }
 
-  Widget _buildCardPair() {
+  Widget _buildReferenceCard() {
+    final color = _mapColor(_responseCard.color);
+
     return FadeTransition(
       opacity: CurvedAnimation(
         parent: _cardEntryAnim,
         curve: Curves.easeOut,
       ),
-      child: SlideTransition(
-        position: Tween<Offset>(
-          begin: const Offset(0, 0.04),
-          end: Offset.zero,
-        ).animate(CurvedAnimation(
-          parent: _cardEntryAnim,
-          curve: Curves.easeOutCubic,
-        )),
-        child: Row(
-          children: [
-            Expanded(child: _buildGameCard(_cards[0], 0)),
-            const SizedBox(width: 16),
-            Expanded(child: _buildGameCard(_cards[1], 1)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGameCard(GameCard card, int index) {
-    final color = _mapColor(card.color);
-
-    return GestureDetector(
-      onTap: () => _onCardTapped(index),
       child: Container(
-        height: 200,
+        height: 160,
+        width: double.infinity,
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-            color: color.withValues(alpha: 0.35),
-            width: 1.5,
+            color: color.withValues(alpha: 0.4),
+            width: 2,
           ),
           boxShadow: [
             BoxShadow(
-              color: color.withValues(alpha: 0.1),
-              blurRadius: 32,
+              color: color.withValues(alpha: 0.15),
+              blurRadius: 40,
               spreadRadius: 0,
               offset: const Offset(0, 8),
             ),
@@ -892,19 +686,64 @@ class _GamePageState extends State<GamePage>
         child: Center(
           child: Wrap(
             alignment: WrapAlignment.center,
-            spacing: 14,
-            runSpacing: 14,
+            spacing: 16,
+            runSpacing: 16,
             children: List.generate(
-              card.count,
+              _responseCard.count,
               (_) => Icon(
-                _mapShapeIcon(card.shape),
-                size: 42,
+                _mapShapeIcon(_responseCard.shape),
+                size: 48,
                 color: color,
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildOptionCards() {
+    return Row(
+      children: List.generate(kKeyCards.length, (i) {
+        final card = kKeyCards[i];
+        final color = _mapColor(card.color);
+        final isLast = i == kKeyCards.length - 1;
+
+        return Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(right: isLast ? 0 : 12),
+            child: GestureDetector(
+              onTap: () => _onOptionTapped(i),
+              child: Container(
+                height: 140,
+                decoration: BoxDecoration(
+                  color: FlexPalette.surfaceLight,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: color.withValues(alpha: 0.25),
+                    width: 1.5,
+                  ),
+                ),
+                child: Center(
+                  child: Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: List.generate(
+                      card.count,
+                      (_) => Icon(
+                        _mapShapeIcon(card.shape),
+                        size: 32,
+                        color: color,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
     );
   }
 
@@ -949,43 +788,6 @@ class _GamePageState extends State<GamePage>
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildReferenceSection(TextTheme tt) {
-    final card = _previousCorrectCard!;
-    final color = _mapColor(card.color);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Previous correct', style: tt.bodyMedium),
-        const SizedBox(height: 8),
-        Container(
-          height: 80,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.06),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: color.withValues(alpha: 0.2),
-            ),
-          ),
-          child: Center(
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 10,
-              children: List.generate(
-                card.count,
-                (_) => Icon(
-                  _mapShapeIcon(card.shape),
-                  size: 28,
-                  color: color.withValues(alpha: 0.7),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 
