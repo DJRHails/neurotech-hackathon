@@ -4,9 +4,11 @@ import time
 from threading import Lock
 
 import numpy as np
-from analysis import CCAAnalysis
+from loguru import logger
 from psychopy import visual
 from psychopy_visionscience.radial import RadialStim
+
+from analysis import CCAAnalysis
 
 SCORE_THRESHOLD = 0.1
 
@@ -28,6 +30,7 @@ class CheckerBoard:
         size: tuple[float, float],
         position: tuple[float, float],
         n_frame: int,
+        *,
         log_time: bool = False,
     ) -> None:
         self._window = window
@@ -36,24 +39,16 @@ class CheckerBoard:
         pattern = np.ones((4, 4))
         pattern[::2, ::2] *= -1
         pattern[1::2, 1::2] *= -1
-        self._stim1 = RadialStim(
-            win=window,
-            tex=pattern,
-            pos=position,
-            size=size,
-            radialCycles=1,
-            texRes=256,
-            opacity=1,
-        )
-        self._stim2 = RadialStim(
-            win=window,
-            tex=pattern * -1,
-            pos=position,
-            size=size,
-            radialCycles=1,
-            texRes=256,
-            opacity=1,
-        )
+        stim_kwargs = {
+            "win": window,
+            "pos": position,
+            "size": size,
+            "radialCycles": 1,
+            "texRes": 256,
+            "opacity": 1,
+        }
+        self._stim1 = RadialStim(tex=pattern, **stim_kwargs)
+        self._stim2 = RadialStim(tex=pattern * -1, **stim_kwargs)
         self._toggle = False
         self.log_time = log_time
         self.toggle_times: list[float] = []
@@ -105,7 +100,7 @@ class SSVEPRealTime:
     ) -> None:
         self._fr_rates = frame_rates
         self._freqs = [screen_refresh_rate / fr for fr in frame_rates]
-        print(f"Target frequencies: {self._freqs}")
+        logger.info("Target frequencies: {}", self._freqs)
         self._positions = positions
         self._labels = labels
         self._chunk_len = signal_len
@@ -153,7 +148,7 @@ class SSVEPRealTime:
         """Print flicker timing statistics."""
         for stim in self.targets:
             avg, std = stim.get_statistics()
-            print(f"frequency: {1 / avg:.2f} Hz, std: {std:.6f}")
+            logger.info("frequency: {:.2f} Hz, std: {:.6f}", 1 / avg, std)
 
     def _init_display(self) -> None:
         self._data_buf = np.array([])
@@ -203,9 +198,9 @@ class SSVEPRealTime:
             self._data_buf = self._data_buf[keep:]
 
         scores = self.cca.apply_cca(chunk)
-        print(f"CCA scores: {scores}")
+        logger.debug("CCA scores: {}", scores)
         if all(s < SCORE_THRESHOLD for s in scores):
             self._predicted_idx = None
         else:
             self._predicted_idx = int(np.argmax(scores))
-            print(f"  -> Target {self._predicted_idx}")
+            logger.info("  -> Target {}", self._predicted_idx)

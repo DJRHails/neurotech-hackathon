@@ -5,8 +5,9 @@ Sources (pick one):
   - --lsl flag: receive from LSL stream (cross-machine)
 
 Usage:
-    uv run python main.py          # simulated source
-    uv run python main.py --lsl    # receive from Windows LSL
+    uv run python main.py                    # simulated source
+    uv run python main.py --lsl              # LSL with default name
+    uv run python main.py --lsl MyStream     # LSL with custom name
 """
 
 import argparse
@@ -419,12 +420,12 @@ class SSVEPPowerScope(pg.PlotWidget):
 # --- Main application ---
 
 
-def _make_source(use_lsl: bool):
+def _make_source(lsl_name: str | None):
     """Create EEG source based on flags."""
-    if use_lsl:
-        logger.info("Creating LSL source")
+    if lsl_name is not None:
+        logger.info("Creating LSL source | name={!r}", lsl_name)
         from lsl_source import LSLSource
-        return LSLSource(stream_name="lock_in_eeg_processed")
+        return LSLSource(stream_name=lsl_name)
     logger.info("Creating simulated source")
     return SimulatedSource()
 
@@ -433,8 +434,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="SSVEP BCI")
     parser.add_argument(
         "--lsl",
-        action="store_true",
-        help="Receive EEG via LSL instead of simulated source",
+        nargs="?",
+        const="lock_in_eeg_processed",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Receive EEG via LSL instead of simulated source"
+            " (default stream: lock_in_eeg_processed)"
+        ),
     )
     parser.add_argument(
         "--prompt",
@@ -493,7 +500,7 @@ def main() -> None:
     logger.debug("Scope window layout built")
 
     # --- Processing pipeline ---
-    source = _make_source(use_lsl=args.lsl)
+    source = _make_source(lsl_name=args.lsl)
     processor = SignalProcessor()
     detector = SSVEPDetector(on_detect=stimulus.set_detection)
 

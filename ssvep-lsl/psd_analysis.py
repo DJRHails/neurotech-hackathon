@@ -14,20 +14,14 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from loguru import logger
 from scipy.signal import welch
 
-# Unicorn Hybrid Black sample rate
 UNICORN_SRATE = 250
-
-# LSL dump sample rate (from stream metadata)
 LSL_SRATE = 250
 
-# Unicorn 8 EEG channel labels (10-20 positions)
-CHANNEL_LABELS = [
-    "Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"
-]
+CHANNEL_LABELS = ["Fz", "C3", "Cz", "C4", "Pz", "PO7", "Oz", "PO8"]
 
-# EEG band definitions
 BANDS = {
     "delta": (0.5, 4),
     "theta": (4, 8),
@@ -45,27 +39,43 @@ BAND_COLORS = {
 }
 
 
+def _ch_columns(header: str) -> list[int]:
+    """Return column indices of ch* columns in a CSV header."""
+    cols = [c.strip() for c in header.split(",")]
+    return [
+        i for i, c in enumerate(cols)
+        if c.startswith("ch")
+    ]
+
+
 def load_lsl_dump(path: Path) -> tuple[np.ndarray, int]:
     """Load LSL dump CSV. Returns (data, sample_rate)."""
+    header = path.read_text().split("\n")[0]
     raw = np.loadtxt(path, delimiter=",", skiprows=1)
-    # columns: timestamp, ch0..ch7
-    eeg = raw[:, 1:9]
+    ch_cols = _ch_columns(header)
+    if ch_cols:
+        eeg = raw[:, ch_cols]
+    else:
+        eeg = raw[:, 1:]
     return eeg, LSL_SRATE
 
 
 def load_unicorn(path: Path) -> tuple[np.ndarray, int]:
     """Load Unicorn Recorder CSV. Returns (data, sample_rate)."""
     raw = np.loadtxt(path, delimiter=",", skiprows=1)
-    # columns: EEG 1..8, TRIG
     eeg = raw[:, :8]
     return eeg, UNICORN_SRATE
 
 
 def load_ssvep_class(path: Path) -> tuple[np.ndarray, int]:
     """Load SSVEP classification CSV. Returns (data, srate)."""
+    header = path.read_text().split("\n")[0]
     raw = np.loadtxt(path, delimiter=",", skiprows=1)
-    # columns: trial, timestamp, ch0..ch7
-    eeg = raw[:, 2:10]
+    ch_cols = _ch_columns(header)
+    if ch_cols:
+        eeg = raw[:, ch_cols]
+    else:
+        eeg = raw[:, 2:]
     return eeg, LSL_SRATE
 
 
@@ -83,9 +93,7 @@ def load_csv(path: Path) -> tuple[np.ndarray, int]:
 
 
 def compute_psd(
-    eeg: np.ndarray,
-    s_rate: int,
-    max_freq: float = 50.0,
+    eeg: np.ndarray, s_rate: int, max_freq: float = 50.0
 ) -> tuple[np.ndarray, np.ndarray]:
     """Welch PSD for each channel.
 
@@ -97,10 +105,7 @@ def compute_psd(
     psds = []
     for ch in range(n_channels):
         freqs, pxx = welch(
-            eeg[:, ch],
-            fs=s_rate,
-            nperseg=min(s_rate * 4, len(eeg[:, ch])),
-            noverlap=None,
+            eeg[:, ch], fs=s_rate, nperseg=min(s_rate * 4, len(eeg[:, ch])), noverlap=None
         )
         mask = freqs <= max_freq
         psds.append(pxx[mask])
@@ -117,20 +122,12 @@ def plot_psd(
 ) -> None:
     """Plot PSD per channel with band shading."""
     n_channels = psd.shape[0]
-    fig, axes = plt.subplots(
-        n_channels, 1,
-        figsize=(12, 2.2 * n_channels),
-        sharex=True,
-    )
+    fig, axes = plt.subplots(n_channels, 1, figsize=(12, 2.2 * n_channels), sharex=True)
     if n_channels == 1:
         axes = [axes]
 
     for ch_idx, ax in enumerate(axes):
-        label = (
-            CHANNEL_LABELS[ch_idx]
-            if ch_idx < len(CHANNEL_LABELS)
-            else f"Ch{ch_idx}"
-        )
+        label = CHANNEL_LABELS[ch_idx] if ch_idx < len(CHANNEL_LABELS) else f"Ch{ch_idx}"
         psd_db = 10 * np.log10(psd[ch_idx] + 1e-20)
         ax.plot(freqs, psd_db, color="k", linewidth=0.8)
 
@@ -149,32 +146,25 @@ def plot_psd(
         ax.set_xlim(0, max_freq)
         ax.grid(True, alpha=0.3)
 
-    axes[0].legend(
-        loc="upper right", ncol=len(BANDS), fontsize=8
-    )
+    axes[0].legend(loc="upper right", ncol=len(BANDS), fontsize=8)
     axes[-1].set_xlabel("Frequency (Hz)")
     fig.suptitle(title, fontsize=13, y=1.0)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved: {out_path}")
+    logger.info("  Saved: {}", out_path)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="PSD analysis for EEG recordings"
+    parser = argparse.ArgumentParser(description="PSD analysis for EEG recordings")
+    parser.add_argument(
+        "--files", nargs="*", help="Specific CSV files (default: all in . and data/)"
     )
     parser.add_argument(
-        "--files", nargs="*",
-        help="Specific CSV files (default: all in . and data/)",
+        "--max-freq", type=float, default=50.0, help="Max frequency for PSD plot (default: 50 Hz)"
     )
     parser.add_argument(
-        "--max-freq", type=float, default=50.0,
-        help="Max frequency for PSD plot (default: 50 Hz)",
-    )
-    parser.add_argument(
-        "--out-dir", type=str, default="plots",
-        help="Output directory for plots (default: plots/)",
+        "--out-dir", type=str, default="plots", help="Output directory for plots (default: plots/)"
     )
     args = parser.parse_args()
 
@@ -192,31 +182,27 @@ def main() -> None:
         )
 
     if not csv_files:
-        print("No CSV files found.")
+        logger.warning("No CSV files found.")
         return
 
-    print(f"Processing {len(csv_files)} files...\n")
+    logger.info("Processing {} files...", len(csv_files))
 
     for path in csv_files:
-        print(f"[{path.name}]")
+        logger.info("[{}]", path.name)
         try:
             eeg, s_rate = load_csv(path)
         except ValueError as exc:
-            print(f"  SKIP: {exc}")
+            logger.warning("  SKIP: {}", exc)
             continue
 
         n_samples, n_ch = eeg.shape
         duration = n_samples / s_rate
-        print(
-            f"  {n_ch} channels, {n_samples} samples, "
-            f"{duration:.1f}s @ {s_rate} Hz"
-        )
+        logger.info("  {} channels, {} samples, {:.1f}s @ {} Hz", n_ch, n_samples, duration, s_rate)
 
-        freqs, psd = compute_psd(
-            eeg, s_rate, max_freq=args.max_freq
-        )
+        freqs, psd = compute_psd(eeg, s_rate, max_freq=args.max_freq)
         plot_psd(
-            freqs, psd,
+            freqs,
+            psd,
             title=path.stem,
             out_path=out_dir / f"{path.stem}_psd.png",
             max_freq=args.max_freq,

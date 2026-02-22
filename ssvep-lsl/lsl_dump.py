@@ -1,7 +1,8 @@
 """Dump raw LSL stream data to CSV with live visualisation.
 
-Shows per-channel filtered waveforms and a shared PSD panel.
-Applies bandpass 1-45 Hz + notch 50/60 Hz by default.
+Shows two windows: per-channel filtered waveforms, and a PSD plot
+with one line per channel. Applies bandpass 1-45 Hz + notch 50/60 Hz
+by default.
 
 Usage:
     uv run python lsl_dump.py
@@ -19,58 +20,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from filters import apply_filter, build_filter
 from matplotlib import pyplot as plt
 from pylsl import StreamInlet, resolve_byprop
-from scipy.signal import butter, sosfilt, sosfilt_zi, welch
+from scipy.signal import welch
 
 PLOT_SECONDS = 5
 PSD_UPDATE_INTERVAL = 0.5
-
-
-def build_filter(
-    fs: float,
-    n_ch: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Build the standard EEG filter chain.
-
-    Bandpass 1-45 Hz, notch 50 Hz, notch 60 Hz.
-    Returns (sos, zi) with zi shaped for n_ch channels.
-    """
-    bp = butter(
-        2,
-        [1.0, 45.0],
-        btype="band",
-        fs=fs,
-        output="sos",
-    )
-    n50 = butter(
-        2,
-        [49.0, 51.0],
-        btype="bandstop",
-        fs=fs,
-        output="sos",
-    )
-    n60 = butter(
-        2,
-        [59.0, 61.0],
-        btype="bandstop",
-        fs=fs,
-        output="sos",
-    )
-    sos = np.vstack([bp, n50, n60])
-    zi_single = sosfilt_zi(sos)  # (n_sections, 2)
-    zi = np.repeat(zi_single[:, :, np.newaxis], n_ch, axis=2)
-    return sos, zi
-
-
-def apply_filter(
-    data: np.ndarray,
-    sos: np.ndarray,
-    zi: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Apply IIR filter chain. data: (n_samples, n_ch)."""
-    filtered, zi = sosfilt(sos, data, axis=0, zi=zi)
-    return filtered.astype(np.float32), zi
 
 
 def main() -> None:
@@ -98,6 +54,14 @@ def main() -> None:
         action="store_true",
         help="Skip bandpass/notch filtering",
     )
+    parser.add_argument(
+        "-c",
+        "--channels",
+        nargs="*",
+        type=int,
+        default=list(range(8)),
+        help="Channel indices to record (default: 0-7)",
+    )
     args = parser.parse_args()
 
     tag = f"_{args.suffix}" if args.suffix else ""
@@ -111,9 +75,22 @@ def main() -> None:
 
     inlet = StreamInlet(streams[0])
     info = inlet.info()
-    n_ch = info.channel_count()
+    total_ch = info.channel_count()
     sr = int(info.nominal_srate())
-    print(f"Connected: {info.name()}, {n_ch} channels @ {sr} Hz")
+    channels = args.channels
+    bad = [c for c in channels if c >= total_ch]
+    if bad:
+        print(
+            f"Channels {bad} out of range "
+            f"(stream has {total_ch})"
+        )
+        raise SystemExit(1)
+    n_ch = len(channels)
+    print(
+        f"Connected: {info.name()}, "
+        f"{total_ch} ch @ {sr} Hz "
+        f"(using {n_ch}: {channels})"
+    )
 
     use_filter = not args.no_filter
     if use_filter:
@@ -128,13 +105,15 @@ def main() -> None:
     ring: deque[list[float]] = deque(maxlen=buf_len)
 
     if not args.no_plot:
-        plot = _init_plot(n_ch, sr, buf_len)
+        plot = _init_plot(channels, sr, buf_len)
 
     last_psd_update = 0.0
 
     with open(output, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp"] + [f"ch{i}" for i in range(n_ch)])
+        writer.writerow(
+            ["timestamp"] + [f"ch{i}" for i in channels]
+        )
         count = 0
         try:
             while True:
@@ -148,6 +127,7 @@ def main() -> None:
                     continue
 
                 samples = np.array(chunk, dtype=np.float32)
+                samples = samples[:, channels]
 
                 if use_filter:
                     samples, zi = apply_filter(
@@ -210,14 +190,21 @@ def main() -> None:
                     plot["ax_psd"].set_xlim(0, 50)
 
                     filt_str = (
-                        "BP 1-45Hz + Notch 50/60Hz" if use_filter else "Raw (no filter)"
+                        "BP 1-45Hz + Notch 50/60Hz"
+                        if use_filter
+                        else "Raw (no filter)"
                     )
-                    plot["fig"].suptitle(
+                    title = (
                         f"LSL: {args.stream} | "
                         f"{n_ch}ch @ {sr}Hz | "
                         f"{count:,} samples | "
-                        f"{filt_str}",
-                        fontsize=10,
+                        f"{filt_str}"
+                    )
+                    plot["fig_raw"].suptitle(
+                        title, fontsize=10
+                    )
+                    plot["fig_psd"].suptitle(
+                        title, fontsize=10
                     )
 
                 plt.pause(0.001)
@@ -230,69 +217,68 @@ def main() -> None:
 
 
 def _init_plot(
-    n_ch: int,
+    channels: list[int],
     sr: int,
     buf_len: int,
 ) -> dict:
-    """Set up per-channel waveforms + shared PSD panel."""
+    """Set up two windows: raw channels and PSD."""
+    n_ch = len(channels)
     plt.ion()
-
-    # n_ch rows for channels + 1 row for PSD
-    n_rows = n_ch + 1
-    fig, axes = plt.subplots(
-        n_rows,
-        1,
-        figsize=(14, 2 * n_rows),
-        gridspec_kw={
-            "height_ratios": [1] * n_ch + [2],
-        },
-        sharex=False,
-    )
-
     colours = plt.cm.tab10(np.linspace(0, 1, n_ch))
+
+    # Window 1: raw channel waveforms
+    fig_raw, axes_raw = plt.subplots(
+        n_ch,
+        1,
+        figsize=(14, 2 * n_ch),
+        sharex=True,
+        num="Raw Channels",
+    )
+    if n_ch == 1:
+        axes_raw = [axes_raw]
 
     ch_axes = []
     ch_lines = []
-    for ch in range(n_ch):
-        ax = axes[ch]
+    for idx, ch_id in enumerate(channels):
+        ax = axes_raw[idx]
         (line,) = ax.plot(
             [],
             [],
             linewidth=0.6,
-            color=colours[ch],
+            color=colours[idx],
         )
         ax.set_ylabel(
-            f"ch{ch}",
+            f"ch{ch_id}",
             fontsize=8,
             rotation=0,
             labelpad=25,
         )
         ax.grid(True, alpha=0.3)
-        ax.tick_params(
-            axis="both",
-            labelsize=7,
-        )
-        if ch < n_ch - 1:
-            ax.tick_params(
-                axis="x",
-                labelbottom=False,
-            )
-        else:
-            ax.set_xlabel("Time (s)", fontsize=8)
+        ax.tick_params(axis="both", labelsize=7)
         ax.set_xlim(0, buf_len / sr)
         ch_axes.append(ax)
         ch_lines.append(line)
 
-    # PSD panel at bottom
-    ax_psd = axes[n_ch]
+    axes_raw[-1].set_xlabel("Time (s)", fontsize=8)
+    fig_raw.tight_layout(rect=[0, 0, 1, 0.96])
+    fig_raw.canvas.draw()
+    fig_raw.show()
+
+    # Window 2: PSD (one line per channel)
+    fig_psd, ax_psd = plt.subplots(
+        1,
+        1,
+        figsize=(10, 5),
+        num="PSD",
+    )
     psd_lines = []
-    for ch in range(n_ch):
+    for idx, ch_id in enumerate(channels):
         (line,) = ax_psd.semilogy(
             [],
             [],
             linewidth=1.0,
-            color=colours[ch],
-            label=f"ch{ch}",
+            color=colours[idx],
+            label=f"ch{ch_id}",
             alpha=0.8,
         )
         psd_lines.append(line)
@@ -306,13 +292,13 @@ def _init_plot(
     )
     ax_psd.grid(True, alpha=0.3)
     ax_psd.set_xlim(0, 50)
-
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.canvas.draw()
-    fig.show()
+    fig_psd.tight_layout()
+    fig_psd.canvas.draw()
+    fig_psd.show()
 
     return {
-        "fig": fig,
+        "fig_raw": fig_raw,
+        "fig_psd": fig_psd,
         "ch_axes": ch_axes,
         "ch_lines": ch_lines,
         "ax_psd": ax_psd,

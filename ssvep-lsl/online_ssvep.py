@@ -13,23 +13,33 @@ import threading
 
 import numpy as np
 from dotenv import load_dotenv
+from loguru import logger
 
 load_dotenv()
 
-from pylsl import StreamInlet, resolve_byprop
-from ssvep import SSVEPRealTime
+from pylsl import StreamInlet, resolve_byprop  # noqa: E402
+
+from ssvep import SSVEPRealTime  # noqa: E402
+
+TARGET_POS = [(-0.6, -0.6), (-0.6, 0.6), (0.6, 0.6), (0.6, -0.6)]
+TARGET_LABELS = ["\u2199", "\u2196", "\u2197", "\u2198"]
+FRAME_RATES = [5, 6, 7, 8]
 
 
 def _lsl_reader(
     inlet: StreamInlet,
     experiment: SSVEPRealTime,
     stop: threading.Event,
+    channels: list[int] | None = None,
 ) -> None:
     """Background thread: pull LSL chunks into experiment."""
     while not stop.is_set():
         chunk, _ = inlet.pull_chunk(timeout=0.1, max_samples=32)
         if chunk:
-            experiment.push_eeg(np.array(chunk))
+            samples = np.array(chunk)
+            if channels is not None:
+                samples = samples[:, channels]
+            experiment.push_eeg(samples)
 
 
 def main() -> None:
@@ -47,46 +57,52 @@ def main() -> None:
         default=120,
         help="Duration in seconds (default: 120)",
     )
+    parser.add_argument(
+        "-c",
+        "--channels",
+        nargs="*",
+        type=int,
+        default=list(range(8)),
+        help="Channel indices to use (default: 0-7)",
+    )
     args = parser.parse_args()
 
-    # 4 targets at screen corners
     # At 60 Hz refresh: 12, 10, 8.57, 7.5 Hz
-    target_pos = [
-        (-0.6, -0.6),
-        (-0.6, 0.6),
-        (0.6, 0.6),
-        (0.6, -0.6),
-    ]
-    target_labels = ["\u2199", "\u2196", "\u2197", "\u2198"]
-    fr_rates = [5, 6, 7, 8]
-
     use_lsl = args.stream.lower() != "none"
 
     if use_lsl:
-        print(f"Resolving LSL stream '{args.stream}'...")
-        streams = resolve_byprop(
-            "name", args.stream, minimum=1, timeout=10
-        )
+        logger.info("Resolving LSL stream '{}'...", args.stream)
+        streams = resolve_byprop("name", args.stream, minimum=1, timeout=10)
         if not streams:
-            raise RuntimeError(
-                f"No LSL stream '{args.stream}' found. "
-                "Is the EEG source running?"
-            )
+            msg = f"No LSL stream '{args.stream}' found. Is the EEG source running?"
+            raise RuntimeError(msg)
         inlet = StreamInlet(streams[0])
         info = inlet.info()
         s_rate = int(info.nominal_srate())
-        print(
-            f"Connected: {info.name()}, "
-            f"{info.channel_count()} ch @ {s_rate} Hz"
+        total_ch = info.channel_count()
+        channels = args.channels
+        bad = [c for c in channels if c >= total_ch]
+        if bad:
+            msg = (
+                f"Channels {bad} out of range "
+                f"(stream has {total_ch})"
+            )
+            raise RuntimeError(msg)
+        logger.info(
+            "Connected: {}, {} ch @ {} Hz "
+            "(using {}: {})",
+            info.name(), total_ch, s_rate,
+            len(channels), channels,
         )
     else:
         s_rate = 250
-        print("Stimulus-only mode (no LSL stream)")
+        channels = args.channels
+        logger.info("Stimulus-only mode (no LSL stream)")
 
     experiment = SSVEPRealTime(
-        frame_rates=fr_rates,
-        positions=target_pos,
-        labels=target_labels,
+        frame_rates=FRAME_RATES,
+        positions=TARGET_POS,
+        labels=TARGET_LABELS,
         signal_len=3,
         eeg_s_rate=s_rate,
         overlap=0.2,
@@ -97,7 +113,7 @@ def main() -> None:
     if use_lsl:
         reader = threading.Thread(
             target=_lsl_reader,
-            args=(inlet, experiment, stop),
+            args=(inlet, experiment, stop, channels),
             daemon=True,
         )
         reader.start()
